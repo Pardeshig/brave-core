@@ -1698,6 +1698,16 @@ bool RewardsServiceImpl::ShouldShowOnboarding() const {
 void RewardsServiceImpl::EnableRewards() {
   StartProcess(base::BindOnce(
       &RewardsServiceImpl::OnStartProcessForEnableRewards, AsWeakPtr()));
+
+  for (auto& observer : observers_) {
+    observer.OnProcessForEnableRewardsStarted();
+  }
+}
+
+void RewardsServiceImpl::OnRewardsPanelClosed(Browser* browser) {
+  for (auto& observer : observers_) {
+    observer.OnRewardsPanelClosed(browser);
+  }
 }
 
 void RewardsServiceImpl::OnStartProcessForEnableRewards() {
