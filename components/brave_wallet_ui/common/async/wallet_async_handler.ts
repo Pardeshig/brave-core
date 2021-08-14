@@ -16,9 +16,11 @@ import {
   APIProxyControllers,
   Network,
   WalletState,
-  WalletPanelState
+  WalletPanelState,
+  AssetPriceTimeframe
 } from '../../constants/types'
 import { InitialVisibleTokenInfo } from '../../options/initial-visible-token-info'
+// import { formatFiatBalance } from '../../utils/format-balances'
 
 type Store = MiddlewareAPI<Dispatch<AnyAction>, any>
 
@@ -93,6 +95,17 @@ async function refreshWalletInfo (store: Store) {
     prices: getTokenPrices
   }
   store.dispatch(WalletActions.tokenBalancesUpdated(tokenBalancesAndPrices))
+
+  // Update Portfolio Price History
+  const getTokenPriceHistory = await Promise.all(state.accounts.map(async (account) => {
+    return Promise.all(account.tokens.map(async (token) => {
+      return {
+        token: token,
+        history: await assetPriceController.getPriceHistory(token.asset.symbol.toLowerCase(), state.selectedPortfolioTimeline)
+      }
+    }))
+  }))
+  store.dispatch(WalletActions.portfolioPriceHistoryUpdated(getTokenPriceHistory))
 }
 
 handler.on(WalletActions.initialize.getType(), async (store) => {
@@ -174,6 +187,23 @@ handler.on(WalletActions.updateVisibleTokens.getType(), async (store, payload: s
   // to update the users visibleTokens
   store.dispatch(WalletActions.setVisibleTokens(payload))
   await refreshWalletInfo(store)
+})
+
+handler.on(WalletActions.selectPortfolioTimeline.getType(), async (store, payload: AssetPriceTimeframe) => {
+  store.dispatch(WalletActions.portfolioTimelineUpdated(payload))
+
+  const apiProxy = await getAPIProxy()
+  const assetPriceController = apiProxy.assetRatioController
+  const state = getWalletState(store)
+  const getTokenPriceHistory = await Promise.all(state.accounts.map(async (account) => {
+    return Promise.all(account.tokens.map(async (token) => {
+      return {
+        token: token,
+        history: await assetPriceController.getPriceHistory(token.asset.symbol.toLowerCase(), state.selectedPortfolioTimeline)
+      }
+    }))
+  }))
+  store.dispatch(WalletActions.portfolioPriceHistoryUpdated(getTokenPriceHistory))
 })
 
 export default handler.middleware
