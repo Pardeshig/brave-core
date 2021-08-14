@@ -279,6 +279,100 @@ void CreativeInlineContentAds::GetForSegments(
                 std::placeholders::_1, segments, callback));
 }
 
+void CreativeInlineContentAds::GetForDimensions(
+    const std::string& dimensions,
+    GetCreativeInlineContentAdsForDimensionsCallback callback) {
+  if (dimensions.empty()) {
+    callback(Result::SUCCESS, {});
+    return;
+  }
+
+  const std::string query = base::StringPrintf(
+      "SELECT "
+      "cbna.creative_instance_id, "
+      "cbna.creative_set_id, "
+      "cbna.campaign_id, "
+      "cam.start_at_timestamp, "
+      "cam.end_at_timestamp, "
+      "cam.daily_cap, "
+      "cam.advertiser_id, "
+      "cam.priority, "
+      "ca.conversion, "
+      "ca.per_day, "
+      "ca.per_week, "
+      "ca.per_month, "
+      "ca.total_max, "
+      "ca.split_test_group, "
+      "s.segment, "
+      "gt.geo_target, "
+      "ca.target_url, "
+      "cbna.title, "
+      "cbna.description, "
+      "cbna.image_url, "
+      "cbna.dimensions, "
+      "cbna.cta_text, "
+      "cam.ptr, "
+      "dp.dow, "
+      "dp.start_minute, "
+      "dp.end_minute "
+      "FROM %s AS cbna "
+      "INNER JOIN campaigns AS cam "
+      "ON cam.campaign_id = cbna.campaign_id "
+      "INNER JOIN segments AS s "
+      "ON s.creative_set_id = cbna.creative_set_id "
+      "INNER JOIN creative_ads AS ca "
+      "ON ca.creative_instance_id = cbna.creative_instance_id "
+      "INNER JOIN geo_targets AS gt "
+      "ON gt.campaign_id = cbna.campaign_id "
+      "INNER JOIN dayparts AS dp "
+      "ON dp.campaign_id = cbna.campaign_id "
+      "AND cbna.dimensions = '%s' "
+      "AND %s BETWEEN cam.start_at_timestamp AND cam.end_at_timestamp",
+      get_table_name().c_str(), dimensions.c_str(),
+      TimeAsTimestampString(base::Time::Now()).c_str());
+
+  DBCommandPtr command = DBCommand::New();
+  command->type = DBCommand::Type::READ;
+  command->command = query;
+
+  command->record_bindings = {
+      DBCommand::RecordBindingType::STRING_TYPE,  // creative_instance_id
+      DBCommand::RecordBindingType::STRING_TYPE,  // creative_set_id
+      DBCommand::RecordBindingType::STRING_TYPE,  // campaign_id
+      DBCommand::RecordBindingType::INT64_TYPE,   // start_at_timestamp
+      DBCommand::RecordBindingType::INT64_TYPE,   // end_at_timestamp
+      DBCommand::RecordBindingType::INT_TYPE,     // daily_cap
+      DBCommand::RecordBindingType::STRING_TYPE,  // advertiser_id
+      DBCommand::RecordBindingType::INT_TYPE,     // priority
+      DBCommand::RecordBindingType::BOOL_TYPE,    // conversion
+      DBCommand::RecordBindingType::INT_TYPE,     // per_day
+      DBCommand::RecordBindingType::INT_TYPE,     // per_week
+      DBCommand::RecordBindingType::INT_TYPE,     // per_month
+      DBCommand::RecordBindingType::INT_TYPE,     // total_max
+      DBCommand::RecordBindingType::STRING_TYPE,  // split_test_group
+      DBCommand::RecordBindingType::STRING_TYPE,  // segment
+      DBCommand::RecordBindingType::STRING_TYPE,  // geo_target
+      DBCommand::RecordBindingType::STRING_TYPE,  // target_url
+      DBCommand::RecordBindingType::STRING_TYPE,  // title
+      DBCommand::RecordBindingType::STRING_TYPE,  // description
+      DBCommand::RecordBindingType::STRING_TYPE,  // image_url
+      DBCommand::RecordBindingType::STRING_TYPE,  // dimensions
+      DBCommand::RecordBindingType::STRING_TYPE,  // cta_text
+      DBCommand::RecordBindingType::DOUBLE_TYPE,  // ptr
+      DBCommand::RecordBindingType::STRING_TYPE,  // dayparts->dow
+      DBCommand::RecordBindingType::INT_TYPE,     // dayparts->start_minute
+      DBCommand::RecordBindingType::INT_TYPE      // dayparts->end_minute
+  };
+
+  DBTransactionPtr transaction = DBTransaction::New();
+  transaction->commands.push_back(std::move(command));
+
+  AdsClientHelper::Get()->RunDBTransaction(
+      std::move(transaction),
+      std::bind(&CreativeInlineContentAds::OnGetForDimensions, this,
+                std::placeholders::_1, callback));
+}
+
 void CreativeInlineContentAds::GetAll(
     GetCreativeInlineContentAdsCallback callback) {
   const std::string query = base::StringPrintf(
@@ -498,6 +592,27 @@ void CreativeInlineContentAds::OnGetForSegments(
   }
 
   callback(Result::SUCCESS, segments, creative_inline_content_ads);
+}
+
+void CreativeInlineContentAds::OnGetForDimensions(
+    DBCommandResponsePtr response,
+    GetCreativeInlineContentAdsForDimensionsCallback callback) {
+  if (!response || response->status != DBCommandResponse::Status::RESPONSE_OK) {
+    BLOG(0, "Failed to get creative inline content ads");
+    callback(Result::FAILED, {});
+    return;
+  }
+
+  CreativeInlineContentAdList creative_inline_content_ads;
+
+  for (const auto& record : response->result->get_records()) {
+    const CreativeInlineContentAdInfo creative_inline_content_ad =
+        GetFromRecord(record.get());
+
+    creative_inline_content_ads.push_back(creative_inline_content_ad);
+  }
+
+  callback(Result::SUCCESS, creative_inline_content_ads);
 }
 
 void CreativeInlineContentAds::OnGetAll(

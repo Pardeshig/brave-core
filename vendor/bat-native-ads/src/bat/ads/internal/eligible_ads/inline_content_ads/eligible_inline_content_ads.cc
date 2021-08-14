@@ -5,6 +5,7 @@
 
 #include "bat/ads/internal/eligible_ads/inline_content_ads/eligible_inline_content_ads.h"
 
+#include <map>
 #include <vector>
 
 #include "bat/ads/inline_content_ad_info.h"
@@ -18,6 +19,8 @@
 #include "bat/ads/internal/client/client.h"
 #include "bat/ads/internal/database/tables/ad_events_database_table.h"
 #include "bat/ads/internal/database/tables/creative_inline_content_ads_database_table.h"
+#include "bat/ads/internal/eligible_ads/ad_features_info.h"
+#include "bat/ads/internal/eligible_ads/eligible_ads_util.h"
 #include "bat/ads/internal/eligible_ads/seen_ads.h"
 #include "bat/ads/internal/eligible_ads/seen_advertisers.h"
 #include "bat/ads/internal/features/ad_serving/ad_serving_features.h"
@@ -76,7 +79,92 @@ void EligibleAds::GetForSegments(const SegmentList& segments,
   });
 }
 
+// TODO(Moritz Haller): create ticket "dev concerns" in new issues. Not for now:
+// abstract out v1/v2 code (get for *) into concrete class
+void EligibleAds::GetForFeatures(const SegmentList& interest_segments,
+                                 const SegmentList& intent_segments,
+                                 const std::string& dimensions,
+                                 SelectAdCallback callback) {  // TODO(Moritz Haller): GetForFeaturesCallback
+  database::table::AdEvents database_table;
+  database_table.GetAll([=](const Result result, const AdEventList& ad_events) {
+    if (result != Result::SUCCESS) {
+      BLOG(1, "Failed to get ad events");
+      callback(/* was_allowed */ false, absl::nullopt);
+      return;
+    }
+
+    const int max_count = features::GetBrowsingHistoryMaxCount();
+    const int days_ago = features::GetBrowsingHistoryDaysAgo();
+    AdsClientHelper::Get()->GetBrowsingHistory(
+        max_count, days_ago, [=](const BrowsingHistoryList& history) {
+          GetEligibleAds(interest_segments, intent_segments, ad_events, history,
+                         dimensions, callback);
+        });
+  });
+}
+
+
 ///////////////////////////////////////////////////////////////////////////////
+
+void EligibleAds::GetEligibleAds(const SegmentList& interest_segments,
+                                 const SegmentList& intent_segments,
+                                 const AdEventList& ad_events,
+                                 const BrowsingHistoryList& browsing_history,
+                                 const std::string& dimensions,
+                                 SelectAdCallback callback) const {
+  BLOG(1, "Get eligible ads");
+
+  database::table::CreativeInlineContentAds database_table;
+  database_table.GetForDimensions(dimensions,
+                                  [=](const Result result,
+                                      const CreativeInlineContentAdList& ads) {
+    if (ads.empty()) {
+      BLOG(1, "No ads");
+      callback(/* was_allowed */ true, absl::nullopt);
+      return;
+    }
+
+    CreativeInlineContentAdList eligible_ads = ApplyFrequencyCapping(
+        ads,
+        ShouldCapLastServedAd(ads) ? last_served_creative_ad_
+                                   : CreativeAdInfo(),
+        ad_events, browsing_history);
+
+    if (eligible_ads.empty()) {
+      BLOG(1, "No eligible ads");
+      callback(/* was_allowed */ true, absl::nullopt);
+      return;
+    }
+
+    ChooseAd(eligible_ads, ad_events, interest_segments,
+                                intent_segments, callback);
+  });
+}
+
+void EligibleAds::ChooseAd(
+    const CreativeInlineContentAdList& eligible_ads,
+    const AdEventList& ad_events,
+    const SegmentList& interest_segments,
+    const SegmentList& intent_segments,
+    SelectAdCallback callback) const {
+  DCHECK(!eligible_ads.empty());
+
+  std::map<std::string, AdFeaturesInfo<CreativeInlineContentAdInfo>> ads =
+      GroupEligibleAdsByCreativeInstanceId(eligible_ads);
+
+  // TODO(Moritz Haller): pass by value good here, or by ref?
+  std::map<std::string, AdFeaturesInfo<CreativeInlineContentAdInfo>>
+      ads_with_features = ComputeFeaturesAndScores(ads, ad_events,
+          interest_segments, intent_segments);
+
+  // TODO(Moritz Haller): "slicing" won't work bc of here, as
+  // we would have to down-cast again to concrete sub-class
+  const absl::optional<CreativeInlineContentAdInfo> ad =
+      SampleFromAds(ads_with_features);
+
+  callback(/* was_allowed */ true, ad);
+}
+
 
 void EligibleAds::GetForParentChildSegments(
     const SegmentList& segments,

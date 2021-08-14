@@ -15,9 +15,11 @@
 #include "bat/ads/internal/bundle/creative_inline_content_ad_info.h"
 #include "bat/ads/internal/eligible_ads/inline_content_ads/eligible_inline_content_ads.h"
 #include "bat/ads/internal/features/inline_content_ads/inline_content_ads_features.h"
+#include "bat/ads/internal/features/ad_serving/ad_serving_features.h"
 #include "bat/ads/internal/logging.h"
 #include "bat/ads/internal/p2a/p2a_ad_opportunities/p2a_ad_opportunity.h"
 #include "bat/ads/internal/resources/frequency_capping/anti_targeting_resource.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace ads {
 namespace inline_content_ads {
@@ -50,8 +52,6 @@ void AdServing::RemoveObserver(InlineContentAdServingObserver* observer) {
 
 void AdServing::MaybeServeAd(const std::string& dimensions,
                              GetInlineContentAdCallback callback) {
-  const SegmentList segments = ad_targeting_->GetSegments();
-
   InlineContentAdInfo inline_content_ad;
 
   if (!features::inline_content_ads::IsEnabled()) {
@@ -59,7 +59,24 @@ void AdServing::MaybeServeAd(const std::string& dimensions,
     return;
   }
 
+  int ad_serving_version = features::GetAdServingVersion();
+  BLOG(1, "Ad serving version " << ad_serving_version);
+  if (ad_serving_version == 2) {
+    MaybeServeAdV2(dimensions, callback);
+    return;
+  }
+
+  MaybeServeAdV1(dimensions, callback);
+}
+
+void AdServing::MaybeServeAdV1(const std::string& dimensions,
+                             GetInlineContentAdCallback callback) {
   DCHECK(eligible_ads_);
+
+  InlineContentAdInfo inline_content_ad;
+
+  const SegmentList segments = ad_targeting_->GetSegments();
+
   eligible_ads_->GetForSegments(
       segments, dimensions,
       [=](const bool was_allowed, const CreativeInlineContentAdList& ads) {
@@ -101,6 +118,53 @@ void AdServing::MaybeServeAd(const std::string& dimensions,
 
         callback(/* success */ true, dimensions, inline_content_ad);
       });
+}
+
+void AdServing::MaybeServeAdV2(const std::string& dimensions,
+                             GetInlineContentAdCallback callback) {
+  InlineContentAdInfo inline_content_ad;
+
+  const SegmentList interest_segments = ad_targeting_->GetInterestSegments();
+  const SegmentList intent_segments = ad_targeting_->GetIntentSegments();
+
+  eligible_ads_->GetForFeatures(
+      interest_segments, intent_segments, dimensions,
+      [=](const bool was_allowed,
+          absl::optional<CreativeInlineContentAdInfo> ad) {
+        if (!ad) {
+          BLOG(1, "Inline content ad not served: No eligible ads found");
+          NotifyFailedToServeInlineContentAd();
+          callback(/* success */ false, dimensions, inline_content_ad);
+          return;
+        }
+
+        eligible_ads_->SetLastServedAd(ad.value());
+
+        InlineContentAdInfo inline_content_ad =
+            BuildInlineContentAd(ad.value());
+
+        BLOG(1, "Serving inline content ad:\n"
+                    << "  uuid: " << inline_content_ad.uuid << "\n"
+                    << "  creativeInstanceId: "
+                    << inline_content_ad.creative_instance_id << "\n"
+                    << "  creativeSetId: " << inline_content_ad.creative_set_id
+                    << "\n"
+                    << "  campaignId: " << inline_content_ad.campaign_id << "\n"
+                    << "  advertiserId: " << inline_content_ad.advertiser_id
+                    << "\n"
+                    << "  segment: " << inline_content_ad.segment << "\n"
+                    << "  title: " << inline_content_ad.title << "\n"
+                    << "  description: " << inline_content_ad.description
+                    << "\n"
+                    << "  imageUrl: " << inline_content_ad.image_url << "\n"
+                    << "  dimensions: " << inline_content_ad.dimensions << "\n"
+                    << "  ctaText: " << inline_content_ad.cta_text << "\n"
+                    << "  targetUrl: " << inline_content_ad.target_url);
+
+        NotifyDidServeInlineContentAd(inline_content_ad);
+
+        callback(/* success */ true, dimensions, inline_content_ad);
+    });
 }
 
 ///////////////////////////////////////////////////////////////////////////////

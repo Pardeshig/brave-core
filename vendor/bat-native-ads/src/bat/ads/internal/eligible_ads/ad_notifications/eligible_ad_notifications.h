@@ -10,6 +10,7 @@
 #include "bat/ads/internal/ad_targeting/ad_targeting_segment.h"
 #include "bat/ads/internal/bundle/creative_ad_notification_info.h"
 #include "bat/ads/internal/frequency_capping/frequency_capping_aliases.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace ads {
 
@@ -24,6 +25,10 @@ class AntiTargeting;
 }  // namespace resource
 
 namespace ad_notifications {
+
+using SelectAdCallback =
+    std::function<void(const bool,
+                       const absl::optional<CreativeAdNotificationInfo>)>;
 
 using GetEligibleAdsCallback =
     std::function<void(const bool, const CreativeAdNotificationList&)>;
@@ -41,6 +46,10 @@ class EligibleAds {
   void GetForSegments(const SegmentList& segments,
                       GetEligibleAdsCallback callback);
 
+  void GetForFeatures(const SegmentList& interest_segments,
+                      const SegmentList& intent_segments,
+                      SelectAdCallback callback);
+
  private:
   ad_targeting::geographic::SubdivisionTargeting*
       subdivision_targeting_;  // NOT OWNED
@@ -48,6 +57,19 @@ class EligibleAds {
   resource::AntiTargeting* anti_targeting_resource_;  // NOT OWNED
 
   CreativeAdInfo last_served_creative_ad_;
+
+  void GetEligibleAds(const SegmentList& interest_segments,
+                      const SegmentList& intent_segments,
+                      const AdEventList& ad_events,
+                      const BrowsingHistoryList& browsing_history,
+                      SelectAdCallback callback) const;
+
+  void ChooseAd(
+      const CreativeAdNotificationList& eligible_ads,
+      const AdEventList& ad_events,
+      const SegmentList& interest_segments,
+      const SegmentList& intent_segments,
+      SelectAdCallback callback) const;
 
   void GetForParentChildSegments(const SegmentList& segments,
                                  const AdEventList& ad_events,
